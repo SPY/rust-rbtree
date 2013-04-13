@@ -1,42 +1,46 @@
 //use core::to_str::*;
 
+#[deriving(Clone, Eq)]
 struct Color(bool);
 
 priv static red: Color = Color(true);
 priv static black: Color = Color(false);
 
-priv struct RBTree<K, V> {
+priv struct RBTree<'self, K, V> {
     color: Color,
-    left: Option<~RBTree<K,V>>,
-    right: Option<~RBTree<K,V>>,
+    left: Option<~RBTree<'self, K,V>>,
+    right: Option<~RBTree<'self, K,V>>,
     key: K,
-    value: V
+    value: V,
+    parent: Option<&'self RBTree<'self, K,V>>
 }
 
 pub fn create<K:Ord + Eq, V>(k: K, v: V) -> RBTree<K, V> {
+    create_with_color(k, v, black)
+}
+
+priv fn create_with_color<K:Ord + Eq, V>(k: K, v: V, c: Color) -> RBTree<K, V> {
     RBTree {
-        color: black,
+        color: c,
         left: None,
         right: None,
         key: k,
-        value: v
+        value: v,
+        parent: None
     }
 }
 
-impl<K: Ord + Eq, V> RBTree<K,V> {
+impl<'self, K: Ord + Eq + Copy, V> RBTree<'self, K,V> {
 
     pub fn find(&self, k: K) -> Option<&'self V> {
         match *self {
             RBTree { key: ref key, value: ref v, _ } if k == *key => Some(v),
             RBTree { key: ref key, left: ref l, right: ref r, _ } => {
-                if *key > k && l.is_some() {
-                    l.get_ref().find(k)
-                }
-                else if *key < k && r.is_some() {
-                    r.get_ref().find(k)
+                if *key > k {
+                    l.chain_ref(|t| t.find(k))
                 }
                 else {
-                    None
+                    r.chain_ref(|t| t.find(k))
                 }
             }
         }
@@ -46,18 +50,18 @@ impl<K: Ord + Eq, V> RBTree<K,V> {
         if k < self.key {
             match self.left {
                 Some(ref mut l) => l.insert(k, v),
-                None => self.left = Some(~create(k, v))
+                None => self.left = Some(self.make_child(k, v))
             }
         }
         else if k > self.key {
             match self.right {
                 Some(ref mut r) => r.insert(k, v),
-                None => self.right = Some(~create(k, v))
+                None => self.right = Some(self.make_child(k, v))
             }
         }
     }
 
-    fn height(&self) -> uint {
+    priv fn height(&self) -> uint {
         match *self {
             RBTree { left: None, right: None, _ } => 1u,
             RBTree { left: ref l, right: ref r, _ } => 
@@ -66,24 +70,33 @@ impl<K: Ord + Eq, V> RBTree<K,V> {
         }
     }
 
+    priv fn grand(&self) -> Option<&'self RBTree<'self, K, V>> {
+        self.parent.chain_ref(|p| p.parent)
+    }
+
+    priv fn make_child(&self, k: K, v: V) -> ~RBTree<'self, K, V> {
+        ~RBTree {
+            color: if self.color == black { red } else { black },
+            left: None,
+            right: None,
+            key: k,
+            value: v,
+            parent: Some(self)
+        }
+    }
 }
 
 priv fn max<T: Ord>(a: T, b: T) -> T {
     if a > b { a } else { b }
 }
 
-impl<K, V: Copy + Add<V,V>> RBTree<K,V> {
+impl<'self, K, V: Copy + Add<V,V>> RBTree<'self, K,V> {
     pub fn sum(&self) -> V {
         let mut val = copy self.value;
-        if self.left.is_some() {
-            val += self.left.get_ref().sum()
-        }
-        if self.right.is_some() {
-            val += self.right.get_ref().sum()
-        }      
+        self.left.map( |l| val += l.sum() );
+        self.right.map( |r| val += r.sum() );
         val
     }
-
 }
 
 #[test]
@@ -96,9 +109,17 @@ fn test_create() {
 fn test_insert() {
     let tree = @mut create(5, "five");
     tree.insert(6, "six");
-    let mut l = tree.right.get_mut_ref();
-    assert!( l.value == "six" && l.key == 6);
-    assert!( l.right.is_none() );
+    let mut r = tree.right.get_mut_ref();
+    assert!( r.value == "six" && r.key == 6);
+    assert!( tree.left.is_none() );
+}
+
+#[test]
+fn test_insert_color() {
+   let tree = @mut create(5, "five");
+    tree.insert(6, "six");
+    let mut r = tree.right.get_mut_ref();
+    assert!( r.color == red );
 }
 
 #[test]
@@ -114,8 +135,10 @@ fn test_find() {
 
 #[test]
 fn test_sum() {
-    let tree = create("five", 5);
-    assert!(5 == tree.sum());
+    let mut tree = @mut create("five", 5);
+    tree.insert("four", 4);
+    tree.insert("six", 6);
+    assert!(15 == tree.sum());
 }
 
 #[test]
